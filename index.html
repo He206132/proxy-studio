@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Proxy Config Studio</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: #0f172a; color: #f8fafc; }
+    textarea { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace; tab-size: 2; }
+    /* 隐藏滚动条但保留滚动功能 */
+    .no-scrollbar::-webkit-scrollbar { display: none; }
+    .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  </style>
+</head>
+<body class="flex flex-col h-screen overflow-hidden">
+
+  <!-- 顶部导航栏 -->
+  <header class="bg-slate-800 border-b border-slate-700 px-4 py-3 flex items-center justify-between shrink-0">
+    <div class="flex items-center space-x-2">
+      <span class="w-3 h-3 rounded-full bg-emerald-400 animate-pulse" id="status-dot"></span>
+      <h1 class="font-bold text-base tracking-wide">配置工作台</h1>
+    </div>
+    <div class="flex items-center space-x-2">
+      <select id="file-selector" class="bg-slate-900 text-xs text-slate-200 border border-slate-600 rounded px-2 py-1.5 focus:outline-none focus:border-blue-500">
+        <option value="">请先拉取 Gist...</option>
+      </select>
+      <button onclick="toggleSettings()" class="bg-slate-700 hover:bg-slate-600 text-xs px-2.5 py-1.5 rounded border border-slate-600">
+        ⚙️ 设置
+      </button>
+    </div>
+  </header>
+
+  <!-- 章节快速跳转栏 (自动解析 [Section]) -->
+  <div id="section-bar" class="bg-slate-900 border-b border-slate-800 px-3 py-2 flex space-x-2 overflow-x-auto no-scrollbar shrink-0 text-xs">
+    <span class="text-slate-500 py-1">加载文件后自动生成段落导航...</span>
+  </div>
+
+  <!-- 语法检查结果抽屉 (默认隐藏) -->
+  <div id="lint-panel" class="hidden bg-slate-800 border-b border-slate-700 max-h-48 overflow-y-auto px-4 py-2 text-xs shrink-0">
+    <div class="flex justify-between items-center mb-1">
+      <span class="font-bold text-slate-300" id="lint-title">语法检查结果</span>
+      <button onclick="document.getElementById('lint-panel').classList.add('hidden')" class="text-slate-400 text-sm">✕</button>
+    </div>
+    <ul id="lint-list" class="space-y-1.5 py-1"></ul>
+  </div>
+
+  <!-- 主编辑器区域 -->
+  <main class="flex-1 flex flex-col relative overflow-hidden">
+    <!-- 快捷符号输入栏 (专为手机键盘设计) -->
+    <div class="bg-slate-800/80 border-b border-slate-700/80 px-2 py-1.5 flex space-x-1.5 overflow-x-auto no-scrollbar text-xs font-mono shrink-0">
+      <button onclick="insertText('# ')" class="bg-slate-700 px-2.5 py-1 rounded active:bg-blue-600">#注释</button>
+      <button onclick="insertText(',')" class="bg-slate-700 px-2.5 py-1 rounded active:bg-blue-600">,</button>
+      <button onclick="insertText(' = ')" class="bg-slate-700 px-2.5 py-1 rounded active:bg-blue-600">=</button>
+      <button onclick="insertText('DOMAIN-SUFFIX,')" class="bg-slate-700 px-2 py-1 rounded active:bg-blue-600">DOMAIN-SUFFIX</button>
+      <button onclick="insertText('DOMAIN-KEYWORD,')" class="bg-slate-700 px-2 py-1 rounded active:bg-blue-600">DOMAIN-KEYWORD</button>
+      <button onclick="insertText('IP-CIDR,')" class="bg-slate-700 px-2 py-1 rounded active:bg-blue-600">IP-CIDR</button>
+      <button onclick="insertText(',PROXY')" class="bg-slate-700 px-2 py-1 rounded active:bg-blue-600">,PROXY</button>
+      <button onclick="insertText(',DIRECT')" class="bg-slate-700 px-2 py-1 rounded active:bg-blue-600">,DIRECT</button>
+      <button onclick="insertText(',REJECT')" class="bg-slate-700 px-2 py-1 rounded active:bg-blue-600">,REJECT</button>
+    </div>
+
+    <textarea id="editor" 
+      class="flex-1 w-full bg-slate-950 text-slate-100 p-3 text-xs leading-relaxed focus:outline-none resize-none"
+      placeholder="点击右上角「⚙️ 设置」填入 GitHub Token 和 Gist ID，然后点击下方「拉取最新」即可开始编辑..."
+      oninput="onEditorInput()"
+      autocapitalize="off" autocomplete="off" autocorrect="off" spellcheck="false"></textarea>
+  </main>
+
+  <!-- 底部操作栏 -->
+  <footer class="bg-slate-800 border-t border-slate-700 px-4 py-2.5 flex items-center justify-between shrink-0">
+    <div class="text-xs text-slate-400" id="line-counter">0 行</div>
+    <div class="flex space-x-2">
+      <button onclick="fetchGist()" class="bg-slate-700 active:bg-slate-600 text-slate-200 text-xs font-medium px-3 py-2 rounded-lg">
+        🔄 拉取最新
+      </button>
+      <button onclick="runLinter(true)" class="bg-amber-600 active:bg-amber-500 text-white text-xs font-medium px-3 py-2 rounded-lg">
+        🔍 语法检查
+      </button>
+      <button onclick="saveGist()" id="save-btn" class="bg-blue-600 active:bg-blue-500 text-white text-xs font-bold px-4 py-2 rounded-lg shadow">
+        ☁️ 保存同步
+      </button>
+    </div>
+  </footer>
+
+  <!-- 设置弹窗 -->
+  <div id="settings-modal" class="hidden fixed inset-0 bg-black/70 z-50 flex items-center justify-center p-4">
+    <div class="bg-slate-800 border border-slate-700 rounded-xl w-full max-w-md p-5 space-y-4 shadow-2xl">
+      <div class="flex justify-between items-center">
+        <h2 class="text-base font-bold">GitHub Gist 连接设置</h2>
+        <button onclick="toggleSettings()" class="text-slate-400">✕</button>
+      </div>
+      <div class="space-y-3 text-xs">
+        <div>
+          <label class="block text-slate-300 mb-1">GitHub Personal Access Token (需勾选 gist 权限)</label>
+          <input type="password" id="gh-token" placeholder="ghp_xxxxxxxxxxxx 或 github_pat_xxxx" 
+            class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-blue-500">
+        </div>
+        <div>
+          <label class="block text-slate-300 mb-1">Gist ID (Gist 链接中用户名后面那串字符)</label>
+          <input type="text" id="gist-id" placeholder="例如: 8f9a2b3c4d5e6f7a8b9c" 
+            class="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-blue-500">
+        </div>
+        <p class="text-slate-400 leading-normal">
+          🔒 提示：Token 与 Gist ID 仅保存在你当前手机浏览器的本地存储（localStorage）中，直接请求 GitHub 官方接口。
+        </p>
+      </div>
+      <div class="flex justify-end space-x-2 pt-2">
+        <button onclick="toggleSettings()" class="bg-slate-700 px-4 py-2 rounded-lg text-xs">取消</button>
+        <button onclick="saveSettings()" class="bg-blue-600 px-4 py-2 rounded-lg text-xs font-bold text-white">保存并拉取</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    let gistFiles = {};
+    let currentFilename = '';
+
+    // 初始化读取本地配置
+    window.onload = () => {
+      const token = localStorage.getItem('proxy_studio_token') || '';
+      const gistId = localStorage.getItem('proxy_studio_gist_id') || '';
+      document.getElementById('gh-token').value = token;
+      document.getElementById('gist-id').value = gistId;
+      if (token && gistId) {
+        fetchGist();
+      } else {
+        toggleSettings();
+      }
+    };
+
+    function toggleSettings() {
+      const modal = document.getElementById('settings-modal');
+      modal.classList.toggle('hidden');
+    }
+
+    function saveSettings() {
+      const token = document.getElementById('gh-token').value.trim();
+      const gistId = document.getElementById('gist-id').value.trim();
+      if (!token || !gistId) {
+        alert('请完整填写 Token 和 Gist ID');
+        return;
+      }
+      localStorage.setItem('proxy_studio_token', token);
+      localStorage.setItem('proxy_studio_gist_id', gistId);
+      toggleSettings();
+      fetchGist();
+    }
+
+    // 拉取 Gist 内容
+    async function fetchGist() {
+      const token = localStorage.getItem('proxy_studio_token');
+      const gistId = localStorage.getItem('proxy_studio_gist_id');
+      if (!token || !gistId) return toggleSettings();
+
+      setStatus('loading', '正在拉取...');
+      try {
+        const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/vnd.github+json'
+          }
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}: 请检查 Token 或 Gist ID 是否正确`);
+        const data = await res.json();
+        gistFiles = data.files;
+
+        const selector = document.getElementById('file-selector');
+        selector.innerHTML = '';
+        const filenames = Object.keys(gistFiles);
+        filenames.forEach(name => {
+          const opt = document.createElement('option');
+          opt.value = name;
+          opt.textContent = name;
+          selector.appendChild(opt);
+        });
+
+        selector.onchange = (e) => loadFileToEditor(e.target.value);
+
+        if (filenames.length > 0) {
+          currentFilename = currentFilename && gistFiles[currentFilename] ? currentFilename : filenames[0];
+          selector.value = currentFilename;
+          loadFileToEditor(currentFilename);
+        }
+        setStatus('ok', '已同步');
+      } catch (err) {
+        setStatus('err', '拉取失败');
+        alert('拉取 Gist 失败: ' + err.message);
+      }
+    }
+
+    function loadFileToEditor(filename) {
+      currentFilename = filename;
+      const content = gistFiles[filename]?.content || '';
+      const editor = document.getElementById('editor');
+      editor.value = content;
+      onEditorInput();
+    }
+
+    function onEditorInput() {
+      const content = document.getElementById('editor').value;
+      const lines = content.split('\n');
+      document.getElementById('line-counter').textContent = `${lines.length} 行`;
+      buildSectionNav(lines);
+    }
+
+    // 解析 [Section] 生成顶部快速跳转按钮
+    function buildSectionNav(lines) {
+      const bar = document.getElementById('section-bar');
+      bar.innerHTML = '';
+      let charCount = 0;
+      let found = false;
+
+      lines.forEach((line, idx) => {
+        const trimmed = line.trim();
+        if (/^\[[^\]]+\]$/.test(trimmed)) {
+          found = true;
+          const pos = charCount;
+          const btn = document.createElement('button');
+          btn.className = 'bg-slate-800 hover:bg-slate-700 text-blue-400 border border-slate-700 px-2.5 py-1 rounded shrink-0 font-mono';
+          btn.textContent = trimmed;
+          btn.onclick = () => jumpToPosition(pos, idx + 1);
+          bar.appendChild(btn);
+        }
+        charCount += line.length + 1;
+      });
+
+      if (!found) {
+        bar.innerHTML = '<span class="text-slate-500 py-1">未检测到 [Section] 段落标记</span>';
+      }
+    }
+
+    function jumpToPosition(charPos, lineNum) {
+      const editor = document.getElementById('editor');
+      editor.focus();
+      editor.setSelectionRange(charPos, charPos);
+      // 估算滚动高度
+      const lineHeight = 19.5;
+      editor.scrollTop = Math.max(0, (lineNum - 3) * lineHeight);
+    }
+
+    function insertText(str) {
+      const editor = document.getElementById('editor');
+      const start = editor.selectionStart;
+      const end = editor.selectionEnd;
+      const val = editor.value;
+      editor.value = val.substring(0, start) + str + val.substring(end);
+      editor.focus();
+      editor.setSelectionRange(start + str.length, start + str.length);
+      onEditorInput();
+    }
+
+    // 核心功能：Surge & Quantumult X 语法检查器
+    function runLinter(showPanel = true) {
+      const content = document.getElementById('editor').value;
+      const lines = content.split('\n');
+      const errors = [];
+      let currentSection = '';
+
+      // 识别配置类型 (Surge 还是 QX)
+      const isQX = content.includes('[filter_local]') || content.includes('[server_local]') || content.includes('[rewrite_local]');
+      const isSurge = content.includes('[General]') || content.includes('[Proxy Group]') || content.includes('[Rule]');
+
+      const validRules = new Set([
+        'DOMAIN', 'DOMAIN-SUFFIX', 'DOMAIN-KEYWORD', 'DOMAIN-SET',
+        'IP-CIDR', 'IP-CIDR6', 'IP-ASN', 'GEOIP', 'USER-AGENT',
+        'URL-REGEX', 'PROCESS-NAME', 'AND', 'OR', 'NOT', 'FINAL',
+        'RULE-SET', 'DEST-PORT', 'SRC-IP', 'IN-PORT', 'PROTOCOL',
+        'HOST', 'HOST-SUFFIX', 'HOST-KEYWORD', 'HOST-WILDCARD' // QX 专属规则头
+      ]);
+
+      lines.forEach((rawLine, idx) => {
+        const lineNum = idx + 1;
+        const line = rawLine.trim();
+
+        // 跳过空行与注释
+        if (!line || line.startsWith('#') || line.startsWith(';') || line.startsWith('//') || line.startsWith('#!')) return;
+
+        // 1. 检查中文全角标点误触（手机输入法最高频错误！）
+        if (/[，；：（）“”‘’]/.test(line) && !line.includes('=')) {
+          errors.push({ line: lineNum, type: 'warn', msg: `检测到中文全角标点符号，可能导致规则失效: "${line}"` });
+        }
+
+        // 2. 检查引号与括号闭合
+        const quoteCount = (line.match(/"/g) || []).length;
+        if (quoteCount % 2 !== 0) {
+          errors.push({ line: lineNum, type: 'error', msg: `双引号 " 未闭合` });
+        }
+
+        // 3. 检查 Section 头部
+        if (line.startsWith('[')) {
+          if (!/^\[[^\]]+\]$/.test(line)) {
+            errors.push({ line: lineNum, type: 'error', msg: `段落标签括号未正确闭合: ${line}` });
+          } else {
+            currentSection = line.toLowerCase();
+          }
+          return;
+        }
+
+        // 4. 根据不同段落校验内部语法
+        // 规则段落校验 (Surge [Rule] 或 QX [filter_local])
+        if (currentSection === '[rule]' || currentSection === '[filter_local]') {
+          const parts = line.split(',').map(s => s.trim());
+          const ruleType = parts[0].toUpperCase();
+
+          if (!validRules.has(ruleType)) {
+            errors.push({ line: lineNum, type: 'error', msg: `未知的规则类型 "${parts[0]}"（是否拼写错误或漏写注释符 # ？）` });
+          } else if (ruleType === 'FINAL') {
+            if (parts.length < 2) {
+              errors.push({ line: lineNum, type: 'error', msg: `FINAL 规则缺少策略指向 (例如: FINAL,PROXY)` });
+            }
+          } else {
+            if (parts.length < 3) {
+              errors.push({ line: lineNum, type: 'error', msg: `规则缺少逗号或策略参数，至少需要 3 项 (类型,匹配值,策略): "${line}"` });
+            } else if (!parts[1] || !parts[2]) {
+              errors.push({ line: lineNum, type: 'error', msg: `规则中存在空的逗号字段: "${line}"` });
+            }
+          }
+        }
+
+        // 键值对段落校验 ([General], [Replica], [MITM], [Proxy], [Proxy Group], [policy] 等)
+        if (['[general]', '[mitm]', '[proxy]', '[proxy group]', '[policy]', '[server_remote]', '[filter_remote]'].includes(currentSection)) {
+          // QX 的远程资源行可能不带等号，而是用逗号分隔 tag=
+          if (currentSection.includes('remote')) {
+            if (!line.includes(',')) {
+              errors.push({ line: lineNum, type: 'error', msg: `远程资源格式错误，缺少逗号分隔参数: "${line}"` });
+            }
+          } else {
+            if (!line.includes('=')) {
+              errors.push({ line: lineNum, type: 'error', msg: `在 ${currentSection} 段落中缺少等号 "=" 赋值: "${line}"` });
+            }
+          }
+        }
+      });
+
+      if (showPanel) {
+        const panel = document.getElementById('lint-panel');
+        const list = document.getElementById('lint-list');
+        const title = document.getElementById('lint-title');
+        panel.classList.remove('hidden');
+        list.innerHTML = '';
+
+        const configTypeStr = isQX ? 'Quantumult X' : (isSurge ? 'Surge' : '通用配置');
+
+        if (errors.length === 0) {
+          title.innerHTML = `✅ <span class="text-emerald-400">${configTypeStr} 语法检查通过，未发现明显错误！</span>`;
+        } else {
+          title.innerHTML = `⚠️ <span class="text-amber-400">${configTypeStr} 发现 ${errors.length} 处潜在问题（点击可跳至对应行）：</span>`;
+          errors.forEach(err => {
+            const li = document.createElement('li');
+            const badgeColor = err.type === 'error' ? 'bg-red-500/20 text-red-400 border-red-500/40' : 'bg-amber-500/20 text-amber-300 border-amber-500/40';
+            li.className = `p-1.5 rounded border ${badgeColor} cursor-pointer flex items-start space-x-2`;
+            li.innerHTML = `<span class="font-mono font-bold shrink-0">第 ${err.line} 行:</span> <span>${err.msg}</span>`;
+            li.onclick = () => {
+              // 计算该行字符位置并跳转
+              const pos = lines.slice(0, err.line - 1).join('\n').length + (err.line > 1 ? 1 : 0);
+              jumpToPosition(pos, err.line);
+            };
+            list.appendChild(li);
+          });
+        }
+      }
+
+      return errors;
+    }
+
+    // 保存并推送到 Gist
+    async function saveGist() {
+      const errors = runLinter(true);
+      const hasFatal = errors.some(e => e.type === 'error');
+      if (hasFatal) {
+        const confirmSave = confirm(`检测到 ${errors.length} 处语法问题，强行保存可能导致 Surge/QX 启动崩溃。\n\n是否仍要强行保存？`);
+        if (!confirmSave) return;
+      }
+
+      const token = localStorage.getItem('proxy_studio_token');
+      const gistId = localStorage.getItem('proxy_studio_gist_id');
+      if (!token || !gistId || !currentFilename) return;
+
+      const btn = document.getElementById('save-btn');
+      btn.disabled = true;
+      btn.textContent = '⏳ 保存中...';
+      setStatus('loading', '正在保存...');
+
+      try {
+        const content = document.getElementById('editor').value;
+        const res = await fetch(`https://api.github.com/gists/${gistId}`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Accept': 'application/vnd.github+json',
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify({
+            files: {
+              [currentFilename]: { content: content }
+            }
+          })
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+        gistFiles = data.files;
+        setStatus('ok', '保存成功');
+        btn.textContent = '✅ 已同步';
+        setTimeout(() => { btn.textContent = '☁️ 保存同步'; btn.disabled = false; }, 1500);
+      } catch (err) {
+        setStatus('err', '保存失败');
+        alert('保存失败: ' + err.message);
+        btn.textContent = '☁️ 保存同步';
+        btn.disabled = false;
+      }
+    }
+
+    function setStatus(state, text) {
+      const dot = document.getElementById('status-dot');
+      dot.className = 'w-3 h-3 rounded-full ' + (
+        state === 'ok' ? 'bg-emerald-400' :
+        state === 'loading' ? 'bg-amber-400 animate-ping' : 'bg-red-500'
+      );
+    }
+  </script>
+</body>
+</html>
